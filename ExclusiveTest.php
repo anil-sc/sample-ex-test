@@ -8,9 +8,19 @@ use \X\Util\FileHelper;
 
 class ExclusiveTest extends AppController {
 
+  protected $model = [
+    'OrgModel',
+    'PageModel',
+    'IdentityModel',
+    'IdentityService',
+    'OrgheadService',
+  ];
+
   /**
    * @example
    * sudo -u nginx CI_ENV=development php /var/www/html/file.idc/public/index.php cli/exclusiveTest/index/org5046;
+   * sudo -u nginx CI_ENV=testing php /var/www/html/file.idc/public/index.php exclusiveTest/index/org6745;
+   * sudo -u nginx CI_ENV=production php /var/www/html/file.idc/public/index.php exclusiveTest/index/org5094;
    */
 
   public function index($orgNo) {
@@ -40,75 +50,65 @@ class ExclusiveTest extends AppController {
   }
 
   public function write(string $time, string $cid, string $orgNo) {
-   $dir = "/home/pic/identities/{$orgNo}/originals/{$cid}";
-
-    $targetfiles = [
-      "doc-front.png",
-      "doc-back.png",
-      "doc-side.png",
-      "face.png",
-    ];
-
-    $file = "{$dir}/.lock";
-
+    // Wait to start process at same time
     time_sleep_until(strtotime($time));
 
-    // Open file.
-    $fp = fopen($file, 'a+');
+    $dir = "/home/pic/identities/{$orgNo}/originals/{$cid}";
+
+    $targetfiles = [ "face.png" ];
 
     Logger::debug("write - Open");
 
-    // Lock file.
-    $lock = flock($fp, LOCK_EX);// Other processes will not be able to modify or browse files.
-
-    if (!$lock) throw new \RuntimeException('Can\'t lock file');
-
-    Logger::debug( "write - Lock\n");
-
     foreach ($targetfiles as $targetfile) {
-      if($targetfile == "face.png") {
-        sleep(5);
-      }
+      $file = "{$dir}/{$targetfile}";
+      // Open file.
+      $fp = fopen($file, 'a+');
+      Logger::debug( "write - Lock\n");
+
+      // Lock file.
+      $lock = flock($fp, LOCK_EX);// Other processes will not be able to modify or browse files.
+      if (!$lock) throw new \RuntimeException('Can\'t lock file');
+
+      //create face.png with 0 byte
+      touch($file);
+      sleep(2);
 
       $tmppath = tempnam(sys_get_temp_dir(), uniqid()) . '.' . pathinfo($targetfile, PATHINFO_EXTENSION);
       ImageHelper::putBase64($this->getBase64(), $tmppath);
-
       FileHelper::makeDirectory(dirname("{$dir}/{$targetfile}"));
       FileHelper::move($tmppath, "{$dir}/{$targetfile}");
 
       $fileSize = FileHelper::humanFilesize("{$dir}/{$targetfile}", 2);
+      Logger::debug(sprintf('write- complete %s, Filesize: %s', "{$dir}/{$targetfile}", $fileSize));
 
-      Logger::debug(sprintf('write: %s, Filesize: %s', "{$dir}/{$targetfile}", $fileSize));
-
+      // Unlock.
+      flock($fp, LOCK_UN);
+      fclose($fp);
     }
 
-    // Unlock.
-    flock($fp, LOCK_UN);
-    fclose($fp);
     Logger::debug( "write - Unlock\n");
+
   }
 
   public function read(string $time, string $cid, string $orgNo) {
-    $dir = "/home/pic/identities/{$orgNo}/originals/{$cid}";
-    $targetfiles = [
-      "doc-front.png",
-      "doc-back.png",
-      "doc-side.png",
-      "face.png",
-    ];
-
-    // create face.png in session dir to simulate file exists but have 0 bytes
-    touch("{$dir}/face.png");
-
-    //lock file
-    $file = "{$dir}/.lock";
-
     // Wait to start process at same time
     time_sleep_until(strtotime($time));
 
+    $dir = "/home/pic/identities/{$orgNo}/originals/{$cid}";
+
+    $targetfiles = [ "face.png" ];
+
+    Logger::debug("read - Open");
+    while(!file_exists("{$dir}/face.png")) {
+      Logger::debug("read - File not found. Wait 1 second.");
+      sleep(1);
+    }
+
+    //lock file
+    $file = "{$dir}/face.png";
+
     // Wait for the write process to start writing to the file.
     $emptyFiles = [];
-
     foreach($targetfiles as $targetfile) {
       $filepath = "{$dir}/{$targetfile}";
 
@@ -117,18 +117,17 @@ class ExclusiveTest extends AppController {
       }
     }
 
-    Logger::debug('Read - Empty files= ', join(' and ',$emptyFiles), ', FILE COUNT= ',count($emptyFiles));
-
-    $fp = fopen($file, 'a+');
-
     if(!empty($emptyFiles)) {
+      Logger::debug('read - Empty files= ', join(' and ',$emptyFiles), ', FILE COUNT= ',count($emptyFiles));
+
       foreach($emptyFiles as $file) {
-        Logger::debug( "Read - Open file: ",$file,' Filesize=',filesize("{$file}"));
+        $fp = fopen("{$file}", 'a+');
+        Logger::debug( "read - Open file: ",$file,' Filesize=',filesize("{$file}"));
         $retries = 0;
         $timeoutSecs = 10;
         $gotLock = true;
         while (!flock($fp, LOCK_EX|LOCK_NB, $wouldBlock)) {
-          Logger::debug('retries= ',$retries);
+          Logger::debug('read - retries= ',$retries);
           if ($wouldBlock && $retries++ < $timeoutSecs)
             sleep(1);
           else {
@@ -137,13 +136,18 @@ class ExclusiveTest extends AppController {
             break;
           }
         }
+
+        // Unlock.
+        flock($fp, LOCK_UN);
+        fclose($fp);
       }
     }
+    Logger::debug( "read - Unlock");
 
-    // Unlock.
-    flock($fp, LOCK_UN);
-    fclose($fp);
-    Logger::debug( "read - Unlock\n");
+    // to update cache of file
+    clearstatcache(true, $file);
+
+    Logger::debug('read - File size:= ',FileHelper::humanFilesize("{$file}", 2));
   }
 
   private function getBase64() {
