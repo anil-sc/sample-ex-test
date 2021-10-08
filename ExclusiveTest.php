@@ -8,19 +8,9 @@ use \X\Util\FileHelper;
 
 class ExclusiveTest extends AppController {
 
-  protected $model = [
-    'OrgModel',
-    'PageModel',
-    'IdentityModel',
-    'IdentityService',
-    'OrgheadService',
-  ];
-
   /**
    * @example
    * sudo -u nginx CI_ENV=development php /var/www/html/file.idc/public/index.php cli/exclusiveTest/index/org5046;
-   * sudo -u nginx CI_ENV=testing php /var/www/html/file.idc/public/index.php exclusiveTest/index/org6745;
-   * sudo -u nginx CI_ENV=production php /var/www/html/file.idc/public/index.php exclusiveTest/index/org5094;
    */
 
   public function index($orgNo) {
